@@ -31,6 +31,13 @@ import os
 import subprocess
 import zlib
 
+try:
+    import gi
+    gi.require_version('Atspi', '2.0')
+    import pyatspi
+except ImportError:
+    pyatspi = None
+
 import fmbtx11_conn
 
 def _run(command):
@@ -43,6 +50,158 @@ def _run(command):
     return exit_status
 
 sortItems = fmbtgti.sortItems
+
+class View(object):
+    def __init__(self, dumpFilename, itemTree, itemOnScreen=None):
+        self._dumpFilename = dumpFilename
+        self._itemTree = itemTree
+        self._rootItem = None
+        self._viewItems = {}
+        if itemOnScreen == None:
+            self._itemOnScreen = lambda item: True
+        else:
+            self._itemOnScreen = itemOnScreen
+        if isinstance(itemTree, list):
+            self._viewSource = "pyatspi"
+            for elt in itemTree:
+                className = elt.get("RoleName", "")
+                text = elt.get("Text", "")
+                if text == "":
+                    text = elt.get("Name", "")
+                if text == "":
+                    text = className
+                vi = ViewItem(
+                    self, int(elt["hash"]), int(elt["parent"]),
+                    className,
+                    text,
+                    elt.get("bbox"),
+                    dumpFilename,
+                    elt)
+                self._viewItems[int(elt["hash"])] = vi
+                if vi.parent() == 0:
+                    self._rootItem = vi
+            if not self._rootItem:
+                raise ValueError("no root item in view data")
+
+    def _intCoords(self, *args):
+        # TODO: relative coordinates like (0.5, 0.9)
+        return [int(c) for c in args[0]]
+
+    def filename(self):
+        return self._dumpFilename
+
+    def rootItem(self):
+        return self._rootItem
+
+    def _dumpItem(self, viewItem):
+        return "id=%s cls=%s text=%s bbox=%s" % (
+            viewItem._itemId, repr(viewItem._className), repr(viewItem._text),
+            viewItem._bbox)
+
+    def _dumpTree(self, rootItem, depth=0):
+        l = ["%s%s" % (" " * (depth * 4), self._dumpItem(rootItem))]
+        for child in rootItem.children():
+            l.extend(self._dumpTree(child, depth+1))
+        return l
+
+    def dumpTree(self, rootItem=None):
+        """
+        Returns item tree as a string
+        """
+        if rootItem == None:
+            rootItem = self.rootItem()
+        return "\n".join(self._dumpTree(rootItem))
+
+    def __str__(self):
+        return "View(%s, %s items)" % (repr(self._dumpFilename), len(self._viewItems))
+
+    def findItems(self, comparator, count=-1, searchRootItem=None, searchItems=None, onScreen=False):
+        foundItems = []
+        if count == 0: return foundItems
+        if searchRootItem != None:
+            if comparator(searchRootItem) and (
+                    not onScreen or (self._itemOnScreen(searchRootItem))):
+                foundItems.append(searchRootItem)
+            for c in searchRootItem.children():
+                foundItems.extend(self.findItems(comparator, count=count-len(foundItems), searchRootItem=c, onScreen=onScreen))
+        else:
+            if searchItems:
+                domain = iter(searchItems)
+            else:
+                domain = self._viewItems.itervalues
+            for i in domain():
+                if comparator(i) and (not onScreen or (self._itemOnScreen(i))):
+                    foundItems.append(i)
+                    if count > 0 and len(foundItems) >= count:
+                        break
+        return foundItems
+
+    def findItemsByText(self, text, partial=False, count=-1, searchRootItem=None, searchItems=None, onScreen=False):
+        if partial:
+            c = lambda item: (text in item._text)
+        else:
+            c = lambda item: (text == item._text)
+        return self.findItems(c, count=count, searchRootItem=searchRootItem, searchItems=searchItems, onScreen=onScreen)
+
+    def findItemsByClass(self, className, partial=False, count=-1, searchRootItem=None, searchItems=None, onScreen=False):
+        if partial:
+            c = lambda item: (className in item._className)
+        else:
+            c = lambda item: (className == item._className)
+        return self.findItems(c, count=count, searchRootItem=searchRootItem, searchItems=searchItems, onScreen=onScreen)
+
+    def findItemsById(self, itemId, count=-1, searchRootItem=None, searchItems=None, onScreen=False):
+        c = lambda item: (itemId == item._itemId or itemId == item.properties().get("AutomationId", None))
+        return self.findItems(c, count=count, searchRootItem=searchRootItem, searchItems=searchItems, onScreen=onScreen)
+
+    def findItemsByProperties(self, properties, count=-1, searchRootItem=None, searchItems=None, onScreen=False):
+        """
+        Returns ViewItems where every property matches given properties
+
+        Parameters:
+          properties (dictionary):
+                  names and required values of properties
+
+        Example:
+          view.findItemsByProperties({"Value": "HELLO", "Name": "File name:"})
+
+        See also:
+          viewitem.dumpProperties()
+
+        Notes:
+          - requires uiautomation (refreshView(viewSource="uiautomation"))
+          - all names and values are strings
+        """
+        c = lambda item: 0 == len([key for key in properties
+                                   if properties[key] != item.properties().get(key, None)])
+        return self.findItems(c, count=count, searchRootItem=searchRootItem, searchItems=searchItems, onScreen=onScreen)
+
+    def findItemsByPos(self, pos, count=-1, searchRootItem=None, searchItems=None, onScreen=False):
+        """
+        Returns list of ViewItems whose bounding box contains the position.
+
+        Parameters:
+          pos (pair of floats (0.0..0.1) or integers (x, y)):
+                  coordinates that fall in the bounding box of found items.
+
+          other parameters: refer to findItems documentation.
+
+        Items are listed in ascending order based on area. They may
+        or may not be from the same branch in the widget hierarchy.
+        """
+        x, y = self._intCoords(pos)
+        c = lambda item: (item.bbox()[0] <= x <= item.bbox()[2] and item.bbox()[1] <= y <= item.bbox()[3])
+        items = self.findItems(c, count=count, searchRootItem=searchRootItem, searchItems=searchItems, onScreen=onScreen)
+        # sort from smallest to greatest area
+        area_items = [((i.bbox()[2] - i.bbox()[0]) * (i.bbox()[3] - i.bbox()[1]), i) for i in items]
+        return [i for _, i in sorted(area_items)]
+
+    def save(self, fileOrDirName):
+        """
+        Save view dump to a file.
+        """
+        shutil.copy(self._dumpFilename, fileOrDirName)
+
 
 class Screen(fmbtgti.GUITestInterface):
     def __init__(self, display="", **kwargs):
@@ -61,6 +220,19 @@ class Screen(fmbtgti.GUITestInterface):
         """
         fmbtgti.GUITestInterface.__init__(self, **kwargs)
         self.setConnection(X11Connection(display))
+
+    def refreshView(self, window=None, viewSource="atspi"):
+        """Update toolkit data"""
+        if viewSource == "atspi":
+            if not pyatspi:
+                raise ValueError('viewSource "atspi" requires pyatspi')
+            for app in pyatspi.Registry.getDesktop(0):
+                if app.name == window:
+                    break
+            else:
+                raise ValueError('cannot scan window "%s"' % (window,))
+        else:
+            raise ValueError('viewSource "%s" not supported' % (viewSource,))
 
     def keyNames(self):
         return _keyNames[:]
