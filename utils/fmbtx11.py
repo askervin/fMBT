@@ -1,5 +1,5 @@
 # fMBT, free Model Based Testing tool
-# Copyright (c) 2013, Intel Corporation.
+# Copyright (c) 2013-2016, Intel Corporation.
 #
 # This program is free software; you can redistribute it and/or modify it
 # under the terms and conditions of the GNU Lesser General Public License,
@@ -30,14 +30,6 @@ import ctypes
 import os
 import subprocess
 import zlib
-
-try:
-    import gi
-    gi.require_version('Atspi', '2.0')
-    import pyatspi
-    """gsettings set org.gnome.desktop.interface toolkit-accessibility true"""
-except ImportError:
-    pyatspi = None
 
 import fmbtx11_conn
 
@@ -140,7 +132,7 @@ class View(object):
                 dumpFilename,
                 item)
             self._viewItems[item["id"]] = vi
-            if vi.parent() == 0:
+            if vi.parent() == None:
                 self._rootItem = vi
         if not self._rootItem:
             raise ValueError("no root item in view data")
@@ -260,61 +252,6 @@ class View(object):
         """
         shutil.copy(self._dumpFilename, fileOrDirName)
 
-def _atspiAddItem(item, parent, foundItems):
-    """Adds an item to foundItems"""
-    rv = {
-        "id": id(item),
-        "parent": id(parent) if parent != None else 0,
-        "class": item.get_role_name(),
-        "name": item.get_name(),
-    }
-    try:
-        bbox = item.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
-        x, y, w, h = bbox
-        rv["bbox"] = (x, y, x+w, y+h)
-    except NotImplementedError:
-        rv["bbox"] = (-1, -1, -1, -1)
-    try:
-        rv["attributes"] = dict([a.split(':', 1) for a in item.getAttributes()])
-    except:
-        rv["attributes"] = None
-    rv["actions"] = []
-    try:
-        actions = item.queryAction()
-        for action in xrange(actions.nActions):
-            rv["actions"].append(actions.getName(action))
-    except NotImplementedError:
-        pass
-    rv["text"] = ""
-    try:
-        text = item.queryText()
-        try:
-            rv["text"] = text.getText(0, text.characterCount)
-        except Exception, e:
-            pass
-    except:
-        pass
-    foundItems.append(rv)
-
-
-def _atspiScanItems(item, parent, foundItems):
-    """Scan items
-
-    Parameters:
-
-      item (atspi object):
-              item whose children will be scanned
-
-      parent (atspi object or None):
-              parent of the item (the first parameter)
-
-      foundItems (list, out parameter):
-              found items, including the item, will be appended
-              to this list.
-    """
-    _atspiAddItem(item, parent, foundItems)
-    for child in item:
-        _atspiScanItems(child, item, foundItems)
 
 class Screen(fmbtgti.GUITestInterface):
     def __init__(self, display="", **kwargs):
@@ -333,30 +270,39 @@ class Screen(fmbtgti.GUITestInterface):
         """
         fmbtgti.GUITestInterface.__init__(self, **kwargs)
         self._lastView = None
+        self._refreshViewDefaults = {}
         self.setConnection(X11Connection(display))
 
     def keyNames(self):
         return _keyNames[:]
 
-    def refreshView(self, window=None, viewSource="atspi"):
+    def refreshView(self, window=None, forcedView=None, viewSource=None):
         """Update toolkit data"""
+        self._lastView = None
+        if window == None:
+            window = self._refreshViewDefaults.get("window", None)
+        if viewSource == None:
+            viewSource = self._refreshViewDefaults.get("viewSource", "atspi")
         if viewSource == "atspi":
-            if not pyatspi:
-                raise ValueError(
-                    'refreshView(viewSource="atspi") requires pyatspi')
-            for app in pyatspi.Registry.getDesktop(0):
-                print repr(app.name)
-                if app.name == window:
-                    break
-            else:
-                raise ValueError('cannot scan window "%s"' % (window,))
-            foundItems = []
-            _atspiScanItems(app, None, foundItems)
+            foundItems = self.existingConnection().recvAtspiViewData(window)
             viewFilename = self._newScreenshotFilepath()[:-3] + "view"
             file(viewFilename, "w").write(repr(foundItems))
             self._lastView = View(viewFilename, foundItems)
         else:
             raise ValueError('viewSource "%s" not supported' % (viewSource,))
+        return self._lastView
+
+    def refreshViewDefaults(self):
+        return self._refreshViewDefaults
+
+    def setRefreshViewDefaults(self, **kwargs):
+        """Set default arguments for refreshView() calls
+
+        Parameters:
+          **kwargs (keyword arguments)
+                  new default values for optional refreshView() parameters.
+        """
+        self._refreshViewDefaults = kwargs
 
     def view(self):
         return self._lastView
@@ -367,6 +313,9 @@ class X11Connection(fmbtx11_conn.Display):
 
     def target(self):
         return "X11"
+
+    def recvAtspiViewData(self, window):
+        return fmbtx11_conn.atspiViewData(window)
 
     def recvScreenshot(self, filename):
         # This is a hack to get this stack quickly testable,
