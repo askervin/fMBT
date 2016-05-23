@@ -35,6 +35,7 @@ try:
     import gi
     gi.require_version('Atspi', '2.0')
     import pyatspi
+    """gsettings set org.gnome.desktop.interface toolkit-accessibility true"""
 except ImportError:
     pyatspi = None
 
@@ -51,6 +52,68 @@ def _run(command):
 
 sortItems = fmbtgti.sortItems
 
+class ViewItem(fmbtgti.GUIItem):
+    def __init__(self, view, itemId, parentId, className, text, bbox,
+                 dumpFilename, rawProperties=None):
+        self._view = view
+        self._itemId = itemId
+        self._parentId = parentId
+        self._className = className
+        self._text = text
+        if rawProperties:
+            self._properties = rawProperties
+        else:
+            self._properties = {}
+        fmbtgti.GUIItem.__init__(self, self._className, bbox, dumpFilename)
+
+    def branch(self):
+        """Returns list of view items from the root down to this item"""
+        rv = []
+        itemId = self._itemId
+        while itemId:
+            rv.append(self._view._viewItems[itemId])
+            if itemId in self._view._viewItems:
+                itemId = self._view._viewItems[itemId]._parentId
+            else:
+                itemId = None
+        rv.reverse()
+        return rv
+
+    def children(self):
+        items = self._view._viewItems
+        return [items[itemId]
+                for itemId in items
+                if items[itemId]._parentId == self._itemId]
+
+    def parent(self):
+        return self._parentId
+
+    def parentItem(self):
+        try:
+            return self._view._viewItems[self._parentId]
+        except KeyError:
+            return None
+
+    def id(self):
+        return self._itemId
+
+    def properties(self):
+        return self._properties
+
+    def text(self):
+        return self._text
+
+    def dumpProperties(self):
+        rv = []
+        if self._properties:
+            for key in sorted(self._properties.keys()):
+                rv.append("%s=%s" % (key, self._properties[key]))
+        return "\n".join(rv)
+
+    def __str__(self):
+        return "ViewItem(%s)" % (self._view._dumpItem(self),)
+
+
 class View(object):
     def __init__(self, dumpFilename, itemTree, itemOnScreen=None):
         self._dumpFilename = dumpFilename
@@ -61,27 +124,26 @@ class View(object):
             self._itemOnScreen = lambda item: True
         else:
             self._itemOnScreen = itemOnScreen
-        if isinstance(itemTree, list):
-            self._viewSource = "pyatspi"
-            for elt in itemTree:
-                className = elt.get("RoleName", "")
-                text = elt.get("Text", "")
-                if text == "":
-                    text = elt.get("Name", "")
-                if text == "":
-                    text = className
-                vi = ViewItem(
-                    self, int(elt["hash"]), int(elt["parent"]),
-                    className,
-                    text,
-                    elt.get("bbox"),
-                    dumpFilename,
-                    elt)
-                self._viewItems[int(elt["hash"])] = vi
-                if vi.parent() == 0:
-                    self._rootItem = vi
-            if not self._rootItem:
-                raise ValueError("no root item in view data")
+        self._viewSource = "atspi"
+        for item in itemTree:
+            className = item.get("class", "")
+            text = item.get("text", "")
+            if text == "":
+                text = item.get("name", "")
+            if text == "":
+                text = className
+            vi = ViewItem(
+                self, item["id"], item["parent"],
+                className,
+                text,
+                item["bbox"],
+                dumpFilename,
+                item)
+            self._viewItems[item["id"]] = vi
+            if vi.parent() == 0:
+                self._rootItem = vi
+        if not self._rootItem:
+            raise ValueError("no root item in view data")
 
     def _intCoords(self, *args):
         # TODO: relative coordinates like (0.5, 0.9)
@@ -167,10 +229,6 @@ class View(object):
 
         See also:
           viewitem.dumpProperties()
-
-        Notes:
-          - requires uiautomation (refreshView(viewSource="uiautomation"))
-          - all names and values are strings
         """
         c = lambda item: 0 == len([key for key in properties
                                    if properties[key] != item.properties().get(key, None)])
@@ -202,6 +260,61 @@ class View(object):
         """
         shutil.copy(self._dumpFilename, fileOrDirName)
 
+def _atspiAddItem(item, parent, foundItems):
+    """Adds an item to foundItems"""
+    rv = {
+        "id": id(item),
+        "parent": id(parent) if parent != None else 0,
+        "class": item.get_role_name(),
+        "name": item.get_name(),
+    }
+    try:
+        bbox = item.queryComponent().getExtents(pyatspi.DESKTOP_COORDS)
+        x, y, w, h = bbox
+        rv["bbox"] = (x, y, x+w, y+h)
+    except NotImplementedError:
+        rv["bbox"] = (-1, -1, -1, -1)
+    try:
+        rv["attributes"] = dict([a.split(':', 1) for a in item.getAttributes()])
+    except:
+        rv["attributes"] = None
+    rv["actions"] = []
+    try:
+        actions = item.queryAction()
+        for action in xrange(actions.nActions):
+            rv["actions"].append(actions.getName(action))
+    except NotImplementedError:
+        pass
+    rv["text"] = ""
+    try:
+        text = item.queryText()
+        try:
+            rv["text"] = text.getText(0, text.characterCount)
+        except Exception, e:
+            pass
+    except:
+        pass
+    foundItems.append(rv)
+
+
+def _atspiScanItems(item, parent, foundItems):
+    """Scan items
+
+    Parameters:
+
+      item (atspi object):
+              item whose children will be scanned
+
+      parent (atspi object or None):
+              parent of the item (the first parameter)
+
+      foundItems (list, out parameter):
+              found items, including the item, will be appended
+              to this list.
+    """
+    _atspiAddItem(item, parent, foundItems)
+    for child in item:
+        _atspiScanItems(child, item, foundItems)
 
 class Screen(fmbtgti.GUITestInterface):
     def __init__(self, display="", **kwargs):
@@ -219,23 +332,34 @@ class Screen(fmbtgti.GUITestInterface):
                   rotation).
         """
         fmbtgti.GUITestInterface.__init__(self, **kwargs)
+        self._lastView = None
         self.setConnection(X11Connection(display))
+
+    def keyNames(self):
+        return _keyNames[:]
 
     def refreshView(self, window=None, viewSource="atspi"):
         """Update toolkit data"""
         if viewSource == "atspi":
             if not pyatspi:
-                raise ValueError('viewSource "atspi" requires pyatspi')
+                raise ValueError(
+                    'refreshView(viewSource="atspi") requires pyatspi')
             for app in pyatspi.Registry.getDesktop(0):
+                print repr(app.name)
                 if app.name == window:
                     break
             else:
                 raise ValueError('cannot scan window "%s"' % (window,))
+            foundItems = []
+            _atspiScanItems(app, None, foundItems)
+            viewFilename = self._newScreenshotFilepath()[:-3] + "view"
+            file(viewFilename, "w").write(repr(foundItems))
+            self._lastView = View(viewFilename, foundItems)
         else:
             raise ValueError('viewSource "%s" not supported' % (viewSource,))
 
-    def keyNames(self):
-        return _keyNames[:]
+    def view(self):
+        return self._lastView
 
 class X11Connection(fmbtx11_conn.Display):
     def __init__(self, display):
