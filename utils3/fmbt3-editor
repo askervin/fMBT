@@ -52,7 +52,6 @@ import atexit
 import codecs
 import getopt
 import os
-import pipes
 import re
 import shlex
 import shutil
@@ -71,8 +70,6 @@ def error(msg, exit_status = 1, gui = False):
     if gui:
         QtGui.QMessageBox.critical(None, "fmbt3-editor error", msg)
     sys.exit(exit_status)
-
-shellArgEscape = pipes.quote
 
 PREVIEWTAB_MODEL, PREVIEWTAB_TEST, PREVIEWTAB_DIST, PREVIEWTAB_COV, PREVIEWTAB_ERR = range(5)
 EDITTAB_GT, EDITTAB_CONF = range(2)
@@ -162,6 +159,8 @@ GT_LANGUAGE = re.compile(r'language\s"([^{]*)"\s*{')
 GT_AALNAME = re.compile(r'aal\s"([^"]*)"\s*{')
 
 GT_CXX_FLAGS = re.compile(r'[ #]preview-cxx-flags:(.*)')
+
+FIND_ERROR_FROM_FMBT_LOG_ADAPTER_MSG = "FIND_ERROR_FROM_FMBT_LOG_ADAPTER_MSG"
 
 _cpp_sources = ["c++","cxx","cpp","cc"]
 
@@ -782,6 +781,10 @@ Keyboard shortcuts:<br>
 
     def showError(self, errorMsg):
         self.preview_error.clear()
+        if errorMsg == FIND_ERROR_FROM_FMBT_LOG_ADAPTER_MSG:
+            status, output = self.runcmd(["fmbt3-log", "-f", "$aL", self._logFileName])
+            errorMsg = (output[1] + output[0]).decode("utf-8")
+
         if "fmbt-aalc: parsing AAL failed" in errorMsg:
             for filename, lineno, whatswrong in re.findall("^(.+):([0-9]+):(.*error.*)", errorMsg):
                 if filename == self._modelFileName or filename in self._modelEditorFiles:
@@ -1079,7 +1082,7 @@ Keyboard shortcuts:<br>
             return
         asyncRuncmd(self._doGenerateTest,
                     onSuccess=lambda: self.visualiseModel_havingTestGenerated(change_tab),
-                    onError=lambda: self.showError(self._test_errormsg))
+                    onError=lambda: self.showError(FIND_ERROR_FROM_FMBT_LOG_ADAPTER_MSG))
 
     def visualiseModel_havingTestGenerated(self, change_tab):
         imgname = _g_tempdir + os.sep + os.path.basename(self._modelFileName) + ".states.png"
@@ -1247,7 +1250,7 @@ on_inconc = exit(2)
             return
         asyncRuncmd(self._doGenerateTest,
                     onSuccess=lambda: self.generateTest_havingTestGenerated(change_tab),
-                    onError=lambda: self.showError(self._test_errormsg))
+                    onError=lambda: self.showError(FIND_ERROR_FROM_FMBT_LOG_ADAPTER_MSG))
         QtCore.QTimer.singleShot(1000, window.liveUpdatePreviewTest)
 
     def generateTest_havingTestGenerated(self, change_tab):

@@ -89,7 +89,6 @@ If logfile is not given, log is read from standard input.
 """
 
 import io as StringIO
-import cgi
 import datetime
 import fmbt_config
 import getopt
@@ -97,6 +96,14 @@ import re
 import sys
 import urllib.parse
 import fmbt
+
+try:
+    import cgi
+except ImportError:
+    import html
+    class cgi:
+        pass
+    cgi.escape = html.escape
 
 VALUE_SEPARATOR = '; '
 RECORD_SEPARATOR = '\n'
@@ -151,7 +158,7 @@ def remove_preceding_timestamp_formatter(s):
     if not m:
         return s
     return s[m.end():]
-remove_preceding_timestamp_formatter_re=re.compile('[0-9]+\.[0-9]{4} ')
+remove_preceding_timestamp_formatter_re=re.compile(r'[0-9]+\.[0-9]{4} ')
 
 def formatTimeDelta(s):
     fmt = _g_time_delta_format

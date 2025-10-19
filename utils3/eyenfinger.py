@@ -635,7 +635,7 @@ def iRead(windowId = None, source = None, preprocess = None, ocr=None, capture=N
     except IndexError:
         raise NoOCRResults("Could not read ocr_page class information from %s" % (hocr_filename,))
 
-    scaled_width, scaled_height = re.findall('bbox 0 0 ([0-9]+)\s*([0-9]+)', ocr_page_line)[0]
+    scaled_width, scaled_height = re.findall(r'bbox 0 0 ([0-9]+)\s*([0-9]+)', ocr_page_line)[0]
     scaled_width, scaled_height = float(scaled_width) / (float(x2-x1)/orig_width), float(scaled_height) / (float(y2-y1)/orig_height)
 
     for word in sorted(_g_words.keys()):
