@@ -24,7 +24,7 @@
 #include <string.h>
 #include <vector>
 
-#include <magick/MagickCore.h>
+#include <MagickCore/MagickCore.h>
 
 #include "eye4graphics.h"
 
@@ -35,6 +35,15 @@
 #define MIN(a,b) (((a)<(b))?(a):(b))
 
 void initeye4graphics() {}
+
+typedef struct _PixelPacket6 {
+    Quantum red;
+    Quantum green;
+    Quantum blue;
+    Quantum opacity;
+} PixelPacket6;
+
+#define PixelPacket PixelPacket6
 
 PixelPacket* getPixels(Image* image, size_t x1, size_t y1, size_t x2, size_t y2);
 
@@ -556,6 +565,7 @@ int findNextColor(BoundingBox* bbox,
     needle.red = color->red;
     needle.green = color->green;
     needle.blue = color->blue;
+    needle.opacity = 0;
 
     for (int y = startY; y < searchArea->bottom; y++) {
         for (int x = startX; x < searchArea->right; x++) {
@@ -833,13 +843,35 @@ void* openImage(const char* imagefile)
 
 PixelPacket* getPixels(Image* image, size_t x1, size_t y1, size_t x2, size_t y2)
 {
+    PixelPacket* pp = (PixelPacket*)malloc(sizeof(PixelPacket) * (x2 - x1) * (y2 - y1));
+    for (size_t i = 0; i < (x2 - x1) * (y2 - y1); i++) {
+        pp[i].red = 0;
+        pp[i].green = 0;
+        pp[i].blue = 0;
+        pp[i].opacity = 0;
+    }
+    if (pp == NULL) return NULL;
+
     ExceptionInfo *exception = AcquireExceptionInfo();
-    PixelPacket* p = GetAuthenticPixels(image, x1, y1, x2, y2, exception);
-    DestroyExceptionInfo(exception);
-    return p;
+
+    // Convert from ImageMagick 7 per channel indexing to ImageMagick 6 PixelPacket structure
+    size_t channels = GetPixelChannels(image);
+
+    for (size_t y = 0; y < y2 - y1; y++) {
+        const Quantum *q = GetVirtualPixels(image, x1, y1 + y, x2 - x1, 1, exception);
+        if (q == (Quantum *) NULL) continue;
+
+        for (size_t x = 0; x < x2 - x1; x++) {
+            PixelPacket* p = pp + y * (x2 - x1) + x;
+            p->red = GetPixelRed(image, q);
+            p->green = GetPixelGreen(image, q);
+            p->blue = GetPixelBlue(image, q);
+            p->opacity = GetPixelOpacity(image, q);
+            q += channels;
+        }
+    }
+    return pp;
 }
-
-
 
 void closeImage(void* image)
 {
