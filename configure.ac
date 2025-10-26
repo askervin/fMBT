@@ -1,4 +1,4 @@
-AC_INIT([fmbt], [0.43.0rc0], [antti.kervinen@intel.com])
+AC_INIT([fmbt], [0.43.0rc0], [antti.kervinen@gmail.com])
 AM_INIT_AUTOMAKE([foreign -Wall -Wno-portability -Werror])
 
 AC_CONFIG_MACRO_DIR([m4])
@@ -105,18 +105,6 @@ AC_CONFIG_FILES([
 
 AM_CONDITIONAL([HAVE_PYTHON], [test "$PYTHON" != :])
 AM_PATH_PYTHON([3.0],, [:])
-
-AC_ARG_WITH([imagemagick],
-  [AS_HELP_STRING([--without-imagemagick],
-    [disable eyenfinger icon recognition])],
-  [],
-  [with_imagemagick="yes"])
-
-AS_IF([test "x$with_imagemagick" != "xno"],
-  [PKG_CHECK_MODULES([MAGICK], [MagickCore], [],
-     [AC_MSG_FAILURE([ImageMagick not found.])])])
-
-AM_CONDITIONAL(HAVE_MAGICK, test x"$with_imagemagick" != "xno")
 
 AS_CASE([$host],
   [*-*-mingw32], [DLINK_OBJ=""],
