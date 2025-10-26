@@ -89,7 +89,7 @@ If logfile is not given, log is read from standard input.
 """
 
 import io as StringIO
-import cgi
+import html
 import datetime
 import fmbt_config
 import getopt
@@ -151,7 +151,7 @@ def remove_preceding_timestamp_formatter(s):
     if not m:
         return s
     return s[m.end():]
-remove_preceding_timestamp_formatter_re=re.compile('[0-9]+\.[0-9]{4} ')
+remove_preceding_timestamp_formatter_re=re.compile(r'[0-9]+\.[0-9]{4} ')
 
 def formatTimeDelta(s):
     fmt = _g_time_delta_format
@@ -297,14 +297,14 @@ def extract_xunit(input_file_obj, output_file_obj):
         verdict = "unknown"
         reason = "test verdict not available in the log"
     if verdict != "pass":
-        failure = '<failure type="%s">%s</failure>' % (verdict, cgi.escape(reason))
+        failure = '<failure type="%s">%s</failure>' % (verdict, html.escape(reason))
     else:
         failure = ""
     system_err = extract_as_string(input_file_obj, "%($al)s")
     output_file_obj.write('''<testcase name="%s" time="%s">
 %s
 <system-err>%s</system-err>
-</testcase>\n''' % (conf_filename, total_time, failure, cgi.escape(system_err)))
+</testcase>\n''' % (conf_filename, total_time, failure, html.escape(system_err)))
 
 def unescape(s):
     return s.replace('\\n', '\n').replace('\\t', '\t')
