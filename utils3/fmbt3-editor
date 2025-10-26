@@ -52,7 +52,6 @@ import atexit
 import codecs
 import getopt
 import os
-import pipes
 import re
 import shlex
 import shutil
@@ -71,8 +70,6 @@ def error(msg, exit_status = 1, gui = False):
     if gui:
         QtGui.QMessageBox.critical(None, "fmbt3-editor error", msg)
     sys.exit(exit_status)
-
-shellArgEscape = pipes.quote
 
 PREVIEWTAB_MODEL, PREVIEWTAB_TEST, PREVIEWTAB_DIST, PREVIEWTAB_COV, PREVIEWTAB_ERR = range(5)
 EDITTAB_GT, EDITTAB_CONF = range(2)
